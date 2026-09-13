@@ -1,0 +1,33 @@
+schema_version: 1
+pi_version: 0.85.1
+
+model: {from: ./models/scripted.yaml}
+
+tools:
+  mode: extend
+  entries:
+    - name: fake_search
+      source: fixture
+      fixture: ./fixtures/search-results.json
+      description: Search a fixed scholarly-source fixture.
+
+system_prompt:
+  mode: pi-default
+
+memory:
+  contents: ./memory/neutral.md
+  retrieval: {type: all}
+  representation: {type: verbatim}
+  delivery: {type: system-prompt, timing: once-per-user-input}
+  mutability: read-only
+
+session:
+  compaction: {enabled: true, reserve_tokens: 16384, keep_recent_tokens: 20000}
+  retries: {enabled: true, max_retries: 2, base_delay_ms: 2000, provider: {max_retry_delay_ms: 60000}}
+
+resources:
+  ambient_discovery: false
+
+limits:
+  wall_clock_ms: 10000
+  max_model_calls: 10

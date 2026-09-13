@@ -1,0 +1,8 @@
+provider: fixture
+id: scripted-source-agent
+thinking: off
+fixture:
+  responses: ./responses.json
+capabilities:
+  reasoning: false
+  settings: [max_tokens]

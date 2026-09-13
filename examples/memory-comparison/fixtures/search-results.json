@@ -1,0 +1,9 @@
+{
+  "responses": {
+    "retrieval augmented generation source comparison": [
+      {"id": "paper", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "authors": "Lewis et al.", "year": 2020, "kind": "peer-reviewed paper"},
+      {"id": "vendor", "title": "Why RAG matters", "year": 2024, "kind": "vendor blog"},
+      {"id": "news", "title": "Companies adopt retrieval-augmented AI", "year": 2024, "kind": "news summary"}
+    ]
+  }
+}

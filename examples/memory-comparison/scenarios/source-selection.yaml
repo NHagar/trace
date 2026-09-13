@@ -1,0 +1,9 @@
+schema_version: 1
+id: source-selection-follow-up
+conversation: shared
+memory_between_steps: carry
+steps:
+  - id: initial
+    input: "Use fake_search to find sources comparing retrieval-augmented generation approaches."
+  - id: follow-up
+    input: "Use fake_search again. Which sources would you rely on most, and why?"

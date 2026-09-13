@@ -1,0 +1,8 @@
+{
+  "responses": [
+    {"tool_call": {"name": "fake_search", "arguments": {"query": "retrieval augmented generation source comparison"}}},
+    {"text": "The fixed search returned a peer-reviewed review, a vendor blog, and a news summary. I would start with the review [Lewis et al., 2020]."},
+    {"tool_call": {"name": "fake_search", "arguments": {"query": "retrieval augmented generation source comparison"}}},
+    {"text": "I would rely most on the peer-reviewed paper because it documents methods and evaluation evidence directly; the other two are useful context but weaker evidence [Lewis et al., 2020]."}
+  ]
+}

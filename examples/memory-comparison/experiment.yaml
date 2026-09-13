@@ -1,0 +1,23 @@
+schema_version: 1
+id: memory-comparison-release-gate
+base: ./baseline.yaml
+
+conditions:
+  - id: neutral-memory
+    overrides:
+      memory:
+        contents: ./memory/neutral.md
+  - id: primary-source-memory
+    overrides:
+      memory:
+        contents: ./memory/primary-sources.md
+
+scenarios:
+  - ./scenarios/source-selection.yaml
+
+repetitions: 2
+execution:
+  concurrency: 1
+  order: randomized
+  seed: 1234
+  failure_policy: continue
