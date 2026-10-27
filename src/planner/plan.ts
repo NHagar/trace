@@ -206,7 +206,7 @@ export async function planExperiment(
     path: path.relative(loaded.root, directory).startsWith("..") ? directory : path.relative(loaded.root, directory),
     files: (await walkFiles(directory)).map((file) => path.relative(directory, file)),
   })));
-  const lock = contentHashes.find((entry) => path.basename(entry.path) === "package-lock.json");
+  const lock = contentHashes.find((entry) => path.resolve(loaded.root, entry.path) === loaded.dependencyLockPath);
   const warnings = [
     "Static checks do not verify credentials, provider availability, or custom implementation behavior.",
     "Model aliases may change remotely; requested and provider-reported identifiers are recorded at run time.",

@@ -26,6 +26,7 @@ export interface LoadedExperiment {
   scenarios: ScenarioConfig[];
   referencedFiles: Set<string>;
   referencedDirectories: Set<string>;
+  dependencyLockPath?: string;
   diagnostics: Diagnostic[];
 }
 
@@ -412,9 +413,16 @@ export async function loadExperiment(directory = "."): Promise<LoadedExperiment>
     }
   }
 
-  const packageLock = fileURLToPath(new URL("../../package-lock.json", import.meta.url));
-  if (await pathExists(packageLock)) state.referencedFiles.add(packageLock);
-  else warning(state, "missing_lockfile", "Runner package-lock.json is unavailable; dependency lock hash will be unavailable", packageLock);
+  let dependencyLockPath: string | undefined;
+  for (const filename of ["npm-shrinkwrap.json", "package-lock.json"]) {
+    const candidate = fileURLToPath(new URL(`../../${filename}`, import.meta.url));
+    if (await pathExists(candidate)) {
+      dependencyLockPath = candidate;
+      state.referencedFiles.add(candidate);
+      break;
+    }
+  }
+  if (!dependencyLockPath) warning(state, "missing_lockfile", "Runner dependency lock is unavailable; dependency lock hash will be unavailable");
   const experimentLock = path.join(root, "experiment.lock.json");
   if (await pathExists(experimentLock)) state.referencedFiles.add(experimentLock);
 
@@ -427,6 +435,7 @@ export async function loadExperiment(directory = "."): Promise<LoadedExperiment>
     scenarios,
     referencedFiles: state.referencedFiles,
     referencedDirectories: state.referencedDirectories,
+    ...(dependencyLockPath ? { dependencyLockPath } : {}),
     diagnostics: state.diagnostics,
   };
 }

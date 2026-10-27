@@ -1,5 +1,5 @@
 {
-  "name": "trace",
+  "name": "@nhagar/trace",
   "version": "0.1.0",
   "description": "Run controlled experiments with coding agents and record their behavior",
   "type": "module",
@@ -14,6 +14,8 @@
   },
   "files": [
     "dist",
+    "examples/memory-comparison",
+    "npm-shrinkwrap.json",
     "README.md",
     "LICENSE"
   ],
@@ -23,7 +25,9 @@
     "pretest": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "prepublishOnly": "npm run check && npm test && npm run build"
+    "prepublishOnly": "npm run check && npm test && npm run test:package",
+    "prepack": "npm run build",
+    "test:package": "node scripts/test-package.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -43,5 +47,13 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NHagar/trace.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "homepage": "https://github.com/NHagar/trace#readme",
+  "bugs": {
+    "url": "https://github.com/NHagar/trace/issues"
   }
 }

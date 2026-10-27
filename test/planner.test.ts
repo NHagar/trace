@@ -2,6 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { planExperiment, validateSavedPlan } from "../src/planner/plan.js";
+import { sha256File } from "../src/util/fs.js";
+import { fileURLToPath } from "node:url";
 import { baselineYaml, basicProject, fixtureModelYaml, writeFiles } from "./helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -99,6 +101,17 @@ scenarios: [./scenarios/example.yaml]
     await writeFile(path.join(root, "models", "responses.json"), '{"responses":[{"text":"changed"}]}\n', "utf8");
     const diagnostics = await validateSavedPlan(plan);
     expect(diagnostics.some((item) => item.code === "stale_plan" && item.path === "models/responses.json")).toBe(true);
+  });
+
+  it("records the runner shrinkwrap instead of a workspace fixture's package lock", async () => {
+    const root = await basicProject({
+      scenario: "schema_version: 1\nid: lockfile\nworkspace: {fixtures: ../workspace}\nconversation: shared\nmemory_between_steps: carry\nsteps: [{id: one, input: hello}]\n",
+      extra: { "workspace/package-lock.json": "{}" },
+    });
+    const result = await planExperiment(root);
+    const lock = await sha256File(fileURLToPath(new URL("../npm-shrinkwrap.json", import.meta.url)));
+    expect(result.plan?.runtime.dependency_lock_sha256).toBe(lock.sha256);
+    expect(result.diagnostics.some((item) => item.code === "missing_lockfile")).toBe(false);
   });
 
   it("rejects scenario IDs that collide after normalization", async () => {

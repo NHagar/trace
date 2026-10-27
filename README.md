@@ -12,6 +12,23 @@ trace uses the [Pi coding-agent SDK](https://github.com/earendil-works/pi/tree/m
 
 You need **Node.js 22.19 or newer** and npm.
 
+Install the public package:
+
+```sh
+npm install --global @nhagar/trace
+trace --help
+```
+
+The package is named `@nhagar/trace`; the command is `trace`. Until the first npm release, use the source installation below.
+
+To run a command without installing globally:
+
+```sh
+npx --package=@nhagar/trace trace --help
+```
+
+### Install from source
+
 ```sh
 git clone https://github.com/NHagar/trace.git
 cd trace
@@ -34,6 +51,12 @@ trace run ./examples/memory-comparison --output ./results/demo
 This runs **4 trials**: two memory conditions, each repeated twice. When it finishes, open `results/demo/manifest.json` for the run statuses and `results/demo/runs/` for the detailed records.
 
 The responses in this example are prerecorded. It demonstrates the workflow and output format; choose a live model for your own behavioral experiments.
+
+These paths assume a source checkout. With a global npm installation, the bundled example is at `$(npm root --global)/@nhagar/trace/examples/memory-comparison`:
+
+```sh
+trace run "$(npm root --global)/@nhagar/trace/examples/memory-comparison" --output ./results/demo
+```
 
 Use a new output directory when running the example again, such as `./results/demo-2`.
 
@@ -248,6 +271,8 @@ trace run --plan ./my-experiment.plan.json
 
 A saved plan freezes the trial order, resolved configuration, input file contents, and input directory membership. trace rejects it if those inputs, the Node version, runner version, Pi version, or dependency lock change. Regenerate plans created before plan format 2. Remote model aliases can still change; trace records the requested and provider-reported identifiers.
 
+The published package includes `npm-shrinkwrap.json` to lock dependency versions. trace records its hash in each plan and execution bundle.
+
 Default limits are **5 minutes** and **100 model calls** per trial. Set `limits.wall_clock_ms` and `limits.max_model_calls` in the baseline to change them. The model-call budget includes agent turns, retrieval helpers, and compaction.
 
 Useful command options:
@@ -269,3 +294,23 @@ npm run build
 ```
 
 The required test suite runs offline with fixture models and tools. Live-provider tests are opt-in.
+
+### Test the installable package
+
+```sh
+npm run test:package
+```
+
+This builds and packs the release archive, installs it in a temporary project, and checks the installed CLI, starter files, bundled example, saved-plan execution with concurrent workers, JavaScript API, and TypeScript declarations. It downloads dependencies from npm and runs four offline fixture trials. Temporary files are removed afterward.
+
+### Release
+
+The package is configured for public publication as `@nhagar/trace`. Sign in to npm as `nhagar`, run the checks, and publish from a clean checkout:
+
+```sh
+npm login
+npm whoami
+npm publish --access public
+```
+
+`prepublishOnly` runs type-checking, the offline test suite, and the installable-package check. `prepack` builds fresh JavaScript before packing. For later releases, choose a new version with `npm version patch`, `minor`, or `major` before publishing.

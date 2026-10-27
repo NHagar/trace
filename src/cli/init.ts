@@ -82,7 +82,7 @@ steps:
   "fixtures/.gitkeep": "",
   "experiment.lock.json": `${JSON.stringify({
     schema_version: 1,
-    runner: "trace@0.1.0",
+    runner: "@nhagar/trace@0.1.0",
     pi: `@earendil-works/pi-coding-agent@${PI_VERSION}`,
     ambient_discovery: false,
   }, null, 2)}\n`,

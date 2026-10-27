@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "runner": "trace@0.1.0",
+  "runner": "@nhagar/trace@0.1.0",
   "pi": "@earendil-works/pi-coding-agent@0.85.1",
   "ambient_discovery": false
 }
