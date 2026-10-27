@@ -1,10 +1,10 @@
 {
-  "name": "agent-study",
+  "name": "trace",
   "version": "0.1.0",
-  "description": "A controlled behavioral experiment runner for Pi coding-agent sessions",
+  "description": "Run controlled experiments with coding agents and record their behavior",
   "type": "module",
   "bin": {
-    "agent-study": "./dist/cli/index.js"
+    "trace": "./dist/cli/index.js"
   },
   "exports": {
     ".": {
@@ -42,6 +42,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NHagar/agent-study.git"
+    "url": "git+https://github.com/NHagar/trace.git"
   }
 }

@@ -203,7 +203,7 @@ export class PiAdapter {
 
   private instrumentation(): InlineExtension {
     return {
-      name: "agent-study-recorder",
+      name: "trace-recorder",
       hidden: true,
       factory: (pi) => {
         pi.on("before_agent_start", async (event) => {
@@ -238,7 +238,7 @@ export class PiAdapter {
           if (delivery?.type === "context-message" && delivery.timing !== "before-every-model-call" && this.currentOnceContextMemory) {
             const memoryMessage = {
               role: "custom",
-              customType: "agent-study-memory",
+              customType: "trace-memory",
               content: this.currentOnceContextMemory,
               display: false,
               details: { role: delivery.role },
@@ -261,7 +261,7 @@ export class PiAdapter {
             if (delivery.type === "context-message") {
               const memoryMessage = {
                 role: "custom",
-                customType: "agent-study-memory",
+                customType: "trace-memory",
                 content,
                 display: false,
                 details: { role: delivery.role },
@@ -306,7 +306,7 @@ export class PiAdapter {
 
   async createSession(): Promise<AdapterSession> {
     await this.initialize();
-    const isolatedAgentDir = path.join(this.ctx.workspace, ".agent-study", "pi-agent");
+    const isolatedAgentDir = path.join(this.ctx.workspace, ".trace", "pi-agent");
     await mkdir(isolatedAgentDir, { recursive: true });
     const settings = SettingsManager.inMemory({
       compaction: {
@@ -363,7 +363,7 @@ export class PiAdapter {
       requested_model: { provider: this.config.model!.provider, id: this.config.model!.id },
       provider_reported_model: { provider: result.session.model?.provider, id: result.session.model?.id },
       ambient_resources: {
-        extensions: result.extensionsResult.extensions.filter((extension) => !extension.path.includes("agent-study-recorder")).map((extension) => extension.path),
+        extensions: result.extensionsResult.extensions.filter((extension) => !extension.path.includes("trace-recorder")).map((extension) => extension.path),
         skills: loader.getSkills().skills.map((skill) => skill.filePath),
         context_files: loader.getAgentsFiles().agentsFiles.map((file) => file.path),
         prompts: loader.getPrompts().prompts.map((prompt) => prompt.name),

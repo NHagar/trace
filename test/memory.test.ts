@@ -7,7 +7,7 @@ import type { BaselineConfig, MemoryConfig, RunContext } from "../src/types.js";
 import { temporaryDirectory, writeFiles } from "./helpers.js";
 
 async function memoryFixture(config: Partial<MemoryConfig> = {}) {
-  const root = await temporaryDirectory("agent-study-memory-");
+  const root = await temporaryDirectory("trace-memory-");
   const workspace = path.join(root, "workspace");
   await mkdir(workspace);
   await writeFiles(root, { "source.md": "unfiltered source", "outside/keep.txt": "keep", "workspace/keep.txt": "keep" });

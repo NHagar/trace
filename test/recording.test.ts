@@ -6,7 +6,7 @@ import { temporaryDirectory } from "./helpers.js";
 
 describe("recording contract", () => {
   it("preserves retry, compaction, cancellation, and limit events distinctly with monotonic sequences", async () => {
-    const root = await temporaryDirectory("agent-study-recorder-");
+    const root = await temporaryDirectory("trace-recorder-");
     const recorder = new RunRecorder(root, {
       run_id: "run",
       condition_id: "condition",

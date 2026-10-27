@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-export async function temporaryDirectory(prefix = "agent-study-test-"): Promise<string> {
+export async function temporaryDirectory(prefix = "trace-test-"): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), prefix));
 }
 

@@ -51,7 +51,7 @@ export async function executeTrial(payload: WorkerPayload): Promise<RunResult> {
   const scenario = plan.scenarios.find((item) => item.id === run.scenario_id);
   if (!condition || !scenario) throw new Error(`Invalid run references for ${run.run_id}`);
   const runDirectory = path.join(payload.output, "runs", run.run_id);
-  const workspace = await mkdtemp(path.join(os.tmpdir(), `agent-study-${run.run_id}-`));
+  const workspace = await mkdtemp(path.join(os.tmpdir(), `trace-${run.run_id}-`));
   const recorder = new RunRecorder(runDirectory, run);
   const startedAt = new Date().toISOString();
   const startedAtMs = Date.now();

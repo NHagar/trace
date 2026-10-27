@@ -53,19 +53,19 @@ function refreshPlanHash(plan: ExecutionPlan): void {
 }
 
 function usage(): string {
-  return `agent-study 0.1.0
+  return `trace 0.1.0
 
 Usage:
-  agent-study init <directory>
-  agent-study check [directory] [--json] [--write-plan <path>]
-  agent-study run [directory] [--plan <path>] [--output <directory>] [--concurrency <n>] [--seed <integer>]
+  trace init <directory>
+  trace check [directory] [--json] [--write-plan <path>]
+  trace run [directory] [--plan <path>] [--output <directory>] [--concurrency <n>] [--seed <integer>]
 `;
 }
 
 export async function main(args = process.argv.slice(2)): Promise<number> {
   const command = args[0];
   const parsed = parseArgs(args.slice(1));
-  if (!command || parsed.flags.has("--help")) {
+  if (!command || command === "--help" || parsed.flags.has("--help")) {
     process.stdout.write(usage());
     return 0;
   }
@@ -77,7 +77,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     const directory = parsed.positionals[0];
     if (!directory) throw new Error("init requires a directory");
     const created = await initializeExperiment(directory);
-    process.stdout.write(`Initialized ${path.resolve(directory)} (${created.length} files). Select an explicit provider/model, then run agent-study check.\n`);
+    process.stdout.write(`Initialized ${path.resolve(directory)} (${created.length} files). Select an explicit provider/model, then run trace check.\n`);
     return 0;
   }
   if (command === "check") {

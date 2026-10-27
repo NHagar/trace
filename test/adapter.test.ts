@@ -17,7 +17,7 @@ const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 async function runSingle(root: string) {
   const checked = await planExperiment(root);
   expect(checked.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-  const output = await temporaryDirectory("agent-study-output-");
+  const output = await temporaryDirectory("trace-output-");
   const result = await executeTrial({ plan: checked.plan!, run: checked.plan!.runs[0]!, output });
   return { result, output, plan: checked.plan! };
 }
@@ -261,7 +261,7 @@ describe("Pi adapter and execution", () => {
   });
 
   it("runs the release-gate example through Pi and records offered, opened, and cited sources", async () => {
-    const output = await temporaryDirectory("agent-study-release-gate-");
+    const output = await temporaryDirectory("trace-release-gate-");
     const cli = path.join(repositoryRoot, "dist", "cli", "index.js");
     const example = path.join(repositoryRoot, "examples", "memory-comparison");
     const result = await execFileAsync(process.execPath, [cli, "run", example, "--output", output], { timeout: 30_000 });
@@ -288,7 +288,7 @@ describe("Pi adapter and execution", () => {
         "tools/counter.mjs": `let count = 0; export default () => ({ name: "counter", label: "counter", description: "counter", parameters: {type:"object",properties:{}}, execute: async () => ({content:[{type:"text",text:String(++count)}],details:{count}}) });\n`,
       },
     });
-    const output = await temporaryDirectory("agent-study-isolation-");
+    const output = await temporaryDirectory("trace-isolation-");
     const cli = path.join(repositoryRoot, "dist", "cli", "index.js");
     await execFileAsync(process.execPath, [cli, "run", root, "--output", output, "--concurrency", "2"], { timeout: 30_000 });
     const runDirs = (await import("node:fs/promises")).readdir(path.join(output, "runs"));
@@ -317,7 +317,7 @@ execution: {concurrency: 1, order: declared, failure_policy: continue}
         "models/slow.json": `${JSON.stringify({ responses: [{ text: "slow ".repeat(2_000) }] })}\n`,
       },
     });
-    const output = await temporaryDirectory("agent-study-interrupt-");
+    const output = await temporaryDirectory("trace-interrupt-");
     const cli = path.join(repositoryRoot, "dist", "cli", "index.js");
     const child = spawn(process.execPath, [cli, "run", root, "--output", output], { stdio: "ignore" });
     const manifestPath = path.join(output, "manifest.json");
