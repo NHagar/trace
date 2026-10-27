@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
@@ -14,6 +14,7 @@ import type {
 } from "../types.js";
 import { isPlainObject } from "../util/object.js";
 import { stableStringify } from "../util/object.js";
+import { isWithinDirectory, pathExists, resolveWorkspacePath } from "../util/fs.js";
 
 function assertRecords(value: unknown, source: string): MemoryRecord[] {
   const values = Array.isArray(value)
@@ -34,19 +35,18 @@ function assertRecords(value: unknown, source: string): MemoryRecord[] {
   });
 }
 
-async function loadRecords(contentsPath: string): Promise<MemoryRecord[]> {
+async function loadRecords(contentsPath: string, parseJson = true): Promise<MemoryRecord[]> {
   const info = await stat(contentsPath);
   if (info.isDirectory()) {
     const records: MemoryRecord[] = [];
     for (const name of (await readdir(contentsPath)).sort()) {
       const filePath = path.join(contentsPath, name);
-      if (!(await stat(filePath)).isFile()) continue;
-      records.push(...(await loadRecords(filePath)));
+      records.push(...(await loadRecords(filePath, parseJson)));
     }
     return records;
   }
   const content = await readFile(contentsPath, "utf8");
-  if (contentsPath.endsWith(".json")) return assertRecords(JSON.parse(content), contentsPath);
+  if (parseJson && contentsPath.endsWith(".json")) return assertRecords(JSON.parse(content), contentsPath);
   return [{ id: path.basename(contentsPath).replace(/\.[^.]+$/, ""), content, source: contentsPath }];
 }
 
@@ -61,10 +61,14 @@ export class MemoryStore {
   private records: MemoryRecord[] = [];
   private initialRecords: MemoryRecord[] = [];
   private fileDestination: string | undefined;
+  private materializedRecords: MemoryRecord[] = [];
+  private retrieverValue: Promise<MemoryRetriever> | undefined;
+  private rendererValue: Promise<MemoryRenderer> | undefined;
 
   constructor(
     readonly config: MemoryConfig,
     private readonly ctx: RunContext,
+    private readonly onFailure?: (error: unknown) => void,
   ) {}
 
   async initialize(): Promise<void> {
@@ -102,8 +106,11 @@ export class MemoryStore {
     }
     const exported = await loadExport(strategy.module, strategy.export);
     if (typeof exported === "function") {
-      const candidate = await exported(strategy.config ?? {});
-      if (isPlainObject(candidate) && typeof candidate.retrieve === "function") return candidate as unknown as MemoryRetriever;
+      if (strategy.factory) {
+        const candidate = await exported(strategy.config ?? {});
+        if (candidate && typeof candidate.retrieve === "function") return candidate as MemoryRetriever;
+        throw new Error(`Custom retriever factory ${strategy.module} must return an object implementing retrieve()`);
+      }
       return { retrieve: exported as MemoryRetriever["retrieve"] };
     }
     if (isPlainObject(exported) && typeof exported.retrieve === "function") return exported as unknown as MemoryRetriever;
@@ -115,8 +122,11 @@ export class MemoryStore {
     if (strategy.type === "custom") {
       const exported = await loadExport(strategy.module, strategy.export);
       if (typeof exported === "function") {
-        const candidate = await exported(strategy.config ?? {});
-        if (isPlainObject(candidate) && typeof candidate.render === "function") return candidate as unknown as MemoryRenderer;
+        if (strategy.factory) {
+          const candidate = await exported(strategy.config ?? {});
+          if (candidate && typeof candidate.render === "function") return candidate as MemoryRenderer;
+          throw new Error(`Custom renderer factory ${strategy.module} must return an object implementing render()`);
+        }
         return { render: exported as MemoryRenderer["render"] };
       }
       if (isPlainObject(exported) && typeof exported.render === "function") return exported as unknown as MemoryRenderer;
@@ -136,41 +146,62 @@ export class MemoryStore {
   }
 
   async retrieve(input: RetrievalInput): Promise<RenderedMemory> {
-    const selection = await (await this.retriever()).retrieve(input, this.ctx);
-    await this.ctx.record("memory_selection", { input, selection });
-    const rendered = await (await this.renderer()).render(selection, this.ctx);
-    await this.ctx.record("memory_rendered", { rendered });
-    return rendered;
+    return (await this.retrieveWithSelection(input)).rendered;
   }
 
-  async materializeFiles(): Promise<void> {
+  async retrieveWithSelection(input: RetrievalInput): Promise<{ selection: MemorySelection; rendered: RenderedMemory }> {
+    try {
+      this.ctx.signal.throwIfAborted();
+      const selection = await (await (this.retrieverValue ??= this.retriever())).retrieve(input, this.ctx);
+      this.ctx.signal.throwIfAborted();
+      if (!selection || !Array.isArray(selection.records)) throw new Error("Memory retriever must return {records: [...]}");
+      await this.ctx.record("memory_selection", { input, selection });
+      const rendered = await (await (this.rendererValue ??= this.renderer())).render(selection, this.ctx);
+      this.ctx.signal.throwIfAborted();
+      if (!rendered || typeof rendered.text !== "string") throw new Error("Memory renderer must return {text: string}");
+      await this.ctx.record("memory_rendered", { rendered });
+      return { selection, rendered };
+    } catch (error) {
+      this.onFailure?.(error);
+      throw error;
+    }
+  }
+
+  async materializeFiles(input: RetrievalInput = { conversation: [] }): Promise<void> {
     if (this.config.delivery?.type !== "files" || !this.config.contents) return;
-    const destination = path.join(this.ctx.workspace, this.config.delivery.destination ?? "memory");
-    this.fileDestination = destination;
+    const destination = await resolveWorkspacePath(this.ctx.workspace, this.config.delivery.destination ?? "memory");
+    const rendered = await this.retrieve(input);
+    const representation = this.config.representation?.type ?? "verbatim";
+    const filename = representation === "json-records" ? "memory.json"
+      : representation === "verbatim" && (await stat(this.config.contents)).isFile() && !this.config.contents.endsWith(".json")
+        ? path.basename(this.config.contents) : "memory.md";
+    const files = rendered.files ?? [{ path: filename, content: rendered.text }];
+    const targets = await Promise.all(files.map(async (file) => {
+      const target = path.resolve(destination, file.path);
+      if (path.isAbsolute(file.path) || !isWithinDirectory(destination, target)) throw new Error(`Rendered memory file escapes its destination: ${file.path}`);
+      await resolveWorkspacePath(this.ctx.workspace, path.relative(this.ctx.workspace, target));
+      return { target, content: file.content };
+    }));
+    this.ctx.signal.throwIfAborted();
     await rm(destination, { recursive: true, force: true });
-    await mkdir(path.dirname(destination), { recursive: true });
-    const info = await stat(this.config.contents);
-    if (info.isDirectory()) await cp(this.config.contents, destination, { recursive: true });
-    else {
-      await mkdir(destination, { recursive: true });
-      await cp(this.config.contents, path.join(destination, path.basename(this.config.contents)));
+    await mkdir(destination, { recursive: true });
+    for (const file of targets) {
+      await mkdir(path.dirname(file.target), { recursive: true });
+      await writeFile(file.target, file.content, "utf8");
+      if (this.config.mutability === "read-only") await chmod(file.target, 0o444);
     }
-    if (this.config.mutability === "read-only") {
-      const children = await readdir(destination, { recursive: true });
-      for (const child of children) {
-        const target = path.join(destination, child.toString());
-        if ((await stat(target)).isFile()) await import("node:fs/promises").then(({ chmod }) => chmod(target, 0o444));
-      }
-    }
+    this.fileDestination = destination;
+    this.materializedRecords = await loadRecords(destination, false);
     await this.ctx.record("memory_files_materialized", { destination });
   }
 
   async captureFileMutations(): Promise<void> {
     if (this.config.delivery?.type !== "files" || !this.fileDestination) return;
-    const finalRecords = await loadRecords(this.fileDestination);
-    if (stableStringify(finalRecords) !== stableStringify(this.records)) {
+    const finalRecords = await pathExists(this.fileDestination) ? await loadRecords(this.fileDestination, false) : [];
+    if (stableStringify(finalRecords) !== stableStringify(this.materializedRecords)) {
       const before = this.snapshot();
       this.records = finalRecords;
+      this.materializedRecords = structuredClone(finalRecords);
       await this.ctx.record("memory_mutation", { action: "files_changed", before, after: this.snapshot() });
     }
   }
@@ -190,6 +221,5 @@ export async function retrieveMemory(
   conversation: unknown[],
   options: { query?: string; step_id?: string } = {},
 ): Promise<{ selection: MemorySelection; rendered: RenderedMemory }> {
-  const rendered = await store.retrieve({ conversation, ...options });
-  return { selection: { records: store.snapshot() }, rendered };
+  return store.retrieveWithSelection({ conversation, ...options });
 }

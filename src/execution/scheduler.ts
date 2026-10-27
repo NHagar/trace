@@ -1,5 +1,5 @@
 import { fork, type ChildProcess } from "node:child_process";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { ExecutionPlan, RunResult, RunStatus } from "../types.js";
@@ -112,8 +112,11 @@ export async function runPlan(
   if (stale.some((item) => item.severity === "error")) throw new DiagnosticError("Saved plan is stale or invalid", stale);
   const output = path.resolve(options.output ?? path.join(plan.root, "results", plan.execution_id));
   const control = path.join(output, ".control");
+  await mkdir(output, { recursive: true });
+  if ((await readdir(output)).length > 0) throw new Error(`Output directory must be empty: ${output}`);
+  // An exclusive mkdir also prevents two schedulers from claiming the same empty output.
+  await mkdir(control);
   await mkdir(path.join(output, "runs"), { recursive: true });
-  await mkdir(control, { recursive: true });
   await atomicWriteJson(path.join(output, "plan.json"), plan);
   await copyAssets(plan, output);
 

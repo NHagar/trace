@@ -7,6 +7,8 @@ import type {
 } from "../types.js";
 import { isPlainObject } from "../util/object.js";
 import { getModel } from "@earendil-works/pi-ai/compat";
+import path from "node:path";
+import { isWithinDirectory } from "../util/fs.js";
 
 const BUILTIN_TOOLS = new Set(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
@@ -197,6 +199,17 @@ function validateMemory(config: BaselineConfig, diagnostics: Diagnostic[], locat
   if (!memory.delivery) add(diagnostics, "required_field", "Memory requires delivery", `${location}.memory.delivery`);
   if (memory.delivery?.type === "files" && "timing" in memory.delivery) {
     add(diagnostics, "undefined_memory_combination", "File delivery does not support automatic retrieval timing", `${location}.memory.delivery`);
+  }
+  if (memory.delivery?.type === "files" && memory.delivery.destination !== undefined) {
+    const destination = memory.delivery.destination;
+    if (typeof destination !== "string" || path.isAbsolute(destination) || !isWithinDirectory(process.cwd(), path.resolve(destination))) {
+      add(diagnostics, "invalid_memory_destination", "Memory destination must be a relative path strictly inside the workspace", `${location}.memory.delivery.destination`);
+    }
+  }
+  for (const strategy of [memory.retrieval, memory.representation]) {
+    if (strategy?.type === "custom" && strategy.factory !== undefined && typeof strategy.factory !== "boolean") {
+      add(diagnostics, "invalid_memory_strategy", "Custom memory strategy factory must be boolean", `${location}.memory`);
+    }
   }
   if (memory.delivery?.type === "context-message" && (memory.delivery.role !== "user" || memory.delivery.placement !== "before-user-input")) {
     add(diagnostics, "adapter_incompatible", "Pi 0.85.1 supports context messages only as user-role before-user-input messages", `${location}.memory.delivery`);

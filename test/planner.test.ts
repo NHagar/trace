@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { planExperiment, validateSavedPlan } from "../src/planner/plan.js";
@@ -99,5 +99,46 @@ scenarios: [./scenarios/example.yaml]
     await writeFile(path.join(root, "models", "responses.json"), '{"responses":[{"text":"changed"}]}\n', "utf8");
     const diagnostics = await validateSavedPlan(plan);
     expect(diagnostics.some((item) => item.code === "stale_plan" && item.path === "models/responses.json")).toBe(true);
+  });
+
+  it("rejects scenario IDs that collide after normalization", async () => {
+    const root = await basicProject({
+      experiment: "schema_version: 1\nid: collision\nbase: ./baseline.yaml\nscenarios: [./scenarios/one.yaml, ./scenarios/two.yaml]\n",
+      extra: {
+        "scenarios/one.yaml": "schema_version: 1\nid: Case\nconversation: shared\nmemory_between_steps: carry\nsteps: [{id: one, input: first}]\n",
+        "scenarios/two.yaml": "schema_version: 1\nid: case\nconversation: shared\nmemory_between_steps: carry\nsteps: [{id: one, input: second}]\n",
+      },
+    });
+    const result = await planExperiment(root);
+    expect(result.plan).toBeUndefined();
+    expect(result.diagnostics.some((item) => item.code === "duplicate_run_id")).toBe(true);
+  });
+
+  it("rejects saved plans when files are added to memory or workspace fixture directories", async () => {
+    const root = await basicProject({
+      baseline: baselineYaml({ memory: "memory:\n  contents: ./memory\n  retrieval: {type: all}\n  representation: {type: verbatim}\n  delivery: {type: system-prompt}\n" }),
+      scenario: "schema_version: 1\nid: files\nworkspace: {fixtures: ../workspace}\nconversation: shared\nmemory_between_steps: carry\nsteps: [{id: one, input: hello}]\n",
+      extra: { "memory/original.md": "original", "workspace/original.txt": "original" },
+    });
+    const plan = (await planExperiment(root)).plan!;
+    expect(await validateSavedPlan(plan)).toEqual([]);
+    await writeFiles(root, { "memory/nested/new.md": "new memory", "workspace/new.txt": "new fixture" });
+    const diagnostics = await validateSavedPlan(plan);
+    expect(diagnostics.filter((item) => item.code === "stale_plan").map((item) => item.path).sort()).toEqual(["memory", "workspace"]);
+  });
+
+  it("freezes initially empty input directories and rejects older saved-plan formats", async () => {
+    const root = await basicProject({
+      baseline: baselineYaml({ memory: "memory:\n  contents: ./memory\n  retrieval: {type: all}\n  representation: {type: verbatim}\n  delivery: {type: system-prompt}\n" }),
+    });
+    await mkdir(path.join(root, "memory"));
+    const plan = (await planExperiment(root)).plan!;
+    expect(await validateSavedPlan(plan)).toEqual([]);
+    await writeFiles(root, { "memory/added.md": "new" });
+    expect((await validateSavedPlan(plan)).some((item) => item.code === "stale_plan")).toBe(true);
+    const old = JSON.parse(JSON.stringify(plan));
+    old.plan_version = 1;
+    delete old.directory_contents;
+    expect((await validateSavedPlan(old))[0]?.message).toContain("format is outdated");
   });
 });

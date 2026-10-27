@@ -70,8 +70,8 @@ function memoryTool(entry: ToolEntryConfig, memory: MemoryStore): ToolDefinition
         await memory.mutate("delete", { id: params.id });
         return { content: [{ type: "text", text: `Deleted memory ${params.id}` }], details: { count: 0 } };
       }
-      const records = memory.snapshot().filter((record) => !params.query || `${record.id}\n${record.content}`.toLowerCase().includes(params.query.toLowerCase()));
-      return { content: [{ type: "text", text: JSON.stringify(records, null, 2) }], details: { count: records.length } };
+      const { selection, rendered } = await memory.retrieveWithSelection({ conversation: [], ...(params.query !== undefined ? { query: params.query } : {}) });
+      return { content: [{ type: "text", text: rendered.text }], details: { count: selection.records.length } };
     },
   });
 }

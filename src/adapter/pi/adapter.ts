@@ -20,8 +20,8 @@ import {
   type AgentSession,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import type { BaselineConfig, RunContext } from "../../types.js";
-import { LimitReachedError } from "../../errors.js";
+import type { BaselineConfig, RetrievalInput, RunContext } from "../../types.js";
+import { InterruptedError, LimitReachedError } from "../../errors.js";
 import { redactSecrets } from "../../util/object.js";
 import { buildToolRegistry, type ResolvedTools } from "../../components/tools.js";
 import { MemoryStore, memoryEnvelope } from "../../components/memory.js";
@@ -57,6 +57,7 @@ export class PiAdapter {
   private memory: MemoryStore | undefined;
   private tools: ResolvedTools | undefined;
   private initialized = false;
+  private failure: Error | undefined;
 
   constructor(
     private readonly config: BaselineConfig,
@@ -75,7 +76,18 @@ export class PiAdapter {
     this.currentStep = stepId;
   }
 
-  async initialize(): Promise<void> {
+  throwIfFailed(): void {
+    if (this.failure) throw this.failure;
+    if (this.ctx.signal.aborted) throw new InterruptedError();
+  }
+
+  private rememberFailure(error: unknown): Error {
+    this.failure ??= error instanceof Error ? error : new Error(String(error));
+    return this.failure;
+  }
+
+  async initialize(initialMemoryInput: RetrievalInput = { conversation: [] }): Promise<void> {
+    this.throwIfFailed();
     if (this.initialized) return;
     const modelConfig = this.config.model!;
     this.runtime = await ModelRuntime.create({
@@ -84,6 +96,26 @@ export class PiAdapter {
       refreshOnCreate: false,
       ...(modelConfig.fixture ? { credentials: new InMemoryCredentialStore() } : {}),
     });
+    // Extension hooks swallow thrown errors. Enforce failures and call budgets at
+    // the runtime boundary shared by agent turns, retrieval helpers, and compaction.
+    const streamSimple = this.runtime.streamSimple.bind(this.runtime);
+    this.runtime.streamSimple = (model, context, options) => {
+      this.throwIfFailed();
+      const maxCalls = this.config.limits?.max_model_calls ?? 100;
+      if (this.modelCallsValue >= maxCalls) {
+        throw this.rememberFailure(new LimitReachedError("model_calls", `Maximum model calls (${maxCalls}) reached`));
+      }
+      this.modelCallsValue += 1;
+      return streamSimple(model, context, {
+        ...options,
+        signal: options?.signal ? AbortSignal.any([options.signal, this.ctx.signal]) : this.ctx.signal,
+        onPayload: async (payload, requestedModel) => {
+          const result = await options?.onPayload?.(payload, requestedModel);
+          this.throwIfFailed();
+          return result;
+        },
+      });
+    };
     if (modelConfig.fixture) {
       const file = JSON.parse(await readFile(modelConfig.fixture.responses, "utf8")) as FixtureFile;
       this.faux = fauxProvider({
@@ -129,11 +161,7 @@ export class PiAdapter {
       },
     };
     this.ctx.recorded_client.complete = async (request) => {
-      const maxCalls = this.config.limits?.max_model_calls ?? 100;
-      this.modelCallsValue += 1;
-      if (this.modelCallsValue > maxCalls) {
-        throw new LimitReachedError("model_calls", `Maximum model calls (${maxCalls}) reached`);
-      }
+      this.throwIfFailed();
       const requestId = randomUUID();
       const requestedModel = request.provider || request.model
         ? this.runtime.getModel(request.provider ?? this.model.provider, request.model ?? this.model.id)
@@ -155,14 +183,17 @@ export class PiAdapter {
       await this.ctx.record("memory_model_response", { request_id: requestId, response: redactSecrets(response) });
       return response;
     };
+    this.throwIfFailed();
     if (this.config.system_prompt.file) this.promptText = await readFile(this.config.system_prompt.file, "utf8");
     else this.promptText = this.config.system_prompt.text;
     if (this.config.memory) {
-      this.memory = new MemoryStore(this.config.memory, this.ctx);
+      this.memory = new MemoryStore(this.config.memory, this.ctx, (error) => { this.rememberFailure(error); });
       await this.memory.initialize();
-      await this.memory.materializeFiles();
+      await this.memory.materializeFiles(initialMemoryInput);
     }
+    this.throwIfFailed();
     this.tools = await buildToolRegistry(this.config, this.ctx, this.memory);
+    this.throwIfFailed();
     await this.ctx.record("tool_registry", {
       definitions: this.tools.definitions,
       allowlist: this.tools.allowlist ?? ["read", "bash", "edit", "write"],
@@ -194,16 +225,14 @@ export class PiAdapter {
           const content = memoryEnvelope(rendered);
           await this.ctx.record("memory_injected", { delivery: delivery.type, timing: "once-per-user-input", content });
           if (delivery.type === "system-prompt") {
-            this.currentSystemPrompt = `${event.systemPrompt}\n\n---\n\n${content}`;
+            this.currentSystemPrompt = `${this.currentSystemPrompt}\n\n---\n\n${content}`;
             return { systemPrompt: this.currentSystemPrompt };
           }
           this.currentOnceContextMemory = content;
           return replacement;
         });
         pi.on("context", async (event) => {
-          this.modelCallsValue += 1;
-          const maxCalls = this.config.limits?.max_model_calls ?? 100;
-          if (this.modelCallsValue > maxCalls) throw new LimitReachedError("model_calls", `Maximum model calls (${maxCalls}) reached`);
+          this.throwIfFailed();
           let messages = event.messages;
           const delivery = this.config.memory?.delivery;
           if (delivery?.type === "context-message" && delivery.timing !== "before-every-model-call" && this.currentOnceContextMemory) {
@@ -253,7 +282,7 @@ export class PiAdapter {
             ? `${this.currentSystemPrompt}\n\n---\n\n${this.currentPerCallMemory}`
             : this.currentSystemPrompt;
           await this.ctx.record("effective_model_request", {
-            model_call: this.modelCallsValue,
+            model_call: this.modelCallsValue + 1,
             system_prompt: effectiveSystemPrompt,
             messages: redactSecrets(messages),
             serialized_provider_payload_available: !this.config.model?.fixture,
@@ -325,6 +354,10 @@ export class PiAdapter {
       ...(tools.allowlist ? { tools: tools.allowlist } : {}),
       customTools: tools.customTools,
     });
+    if (this.ctx.signal.aborted) {
+      result.session.dispose();
+      this.throwIfFailed();
+    }
     if (result.extensionsResult.errors.length > 0) throw new Error(`Internal adapter extension failed: ${JSON.stringify(result.extensionsResult.errors)}`);
     await this.ctx.record("session_created", {
       requested_model: { provider: this.config.model!.provider, id: this.config.model!.id },

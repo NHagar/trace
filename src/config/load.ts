@@ -25,12 +25,14 @@ export interface LoadedExperiment {
   baseline: BaselineConfig;
   scenarios: ScenarioConfig[];
   referencedFiles: Set<string>;
+  referencedDirectories: Set<string>;
   diagnostics: Diagnostic[];
 }
 
 interface LoaderState {
   diagnostics: Diagnostic[];
   referencedFiles: Set<string>;
+  referencedDirectories: Set<string>;
   referenceStack: string[];
 }
 
@@ -174,6 +176,7 @@ async function registerPath(
     diagnostic(state, "missing_resource", `Missing resource: ${absolute}`, location);
     return absolute;
   }
+  if ((await stat(absolute)).isDirectory()) state.referencedDirectories.add(absolute);
   for (const file of await walkFiles(absolute)) state.referencedFiles.add(file);
   return absolute;
 }
@@ -273,7 +276,7 @@ async function resolveMemory(
   ];
   for (const [key, strategy] of strategies) {
     if (!strategy) continue;
-    const allowed = strategy.type === "custom" ? new Set(["type", "module", "export", "config"]) : new Set(["type"]);
+    const allowed = strategy.type === "custom" ? new Set(["type", "module", "export", "factory", "config"]) : new Set(["type"]);
     knownKeys(state, strategy, allowed, `${location}.${key}`);
     if (strategy.type === "custom" && typeof strategy.module === "string") {
       const modulePath = await registerPath(strategy.module, resolved.declaringFile, state, `${location}.${key}.module`);
@@ -342,7 +345,7 @@ async function resolveScenario(raw: unknown, scenarioPath: string, state: Loader
 export async function resolveOverrideReferences(
   raw: unknown,
   declaringFile: string,
-  state: Pick<LoaderState, "diagnostics" | "referencedFiles">,
+  state: Pick<LoaderState, "diagnostics" | "referencedFiles" | "referencedDirectories">,
   location: string,
 ): Promise<unknown> {
   const loaderState: LoaderState = { ...state, referenceStack: [] };
@@ -366,7 +369,7 @@ export async function resolveOverrideReferences(
 export async function loadExperiment(directory = "."): Promise<LoadedExperiment> {
   const root = path.resolve(directory);
   const experimentPath = path.join(root, "experiment.yaml");
-  const state: LoaderState = { diagnostics: [], referencedFiles: new Set(), referenceStack: [] };
+  const state: LoaderState = { diagnostics: [], referencedFiles: new Set(), referencedDirectories: new Set(), referenceStack: [] };
   const experimentRaw = await readYaml(experimentPath, state);
   knownKeys(state, experimentRaw, EXPERIMENT_KEYS, "experiment");
   const experiment = structuredClone(experimentRaw) as unknown as ExperimentConfig;
@@ -423,24 +426,25 @@ export async function loadExperiment(directory = "."): Promise<LoadedExperiment>
     baseline,
     scenarios,
     referencedFiles: state.referencedFiles,
+    referencedDirectories: state.referencedDirectories,
     diagnostics: state.diagnostics,
   };
 }
 
-export function loaderDiagnosticSink(loaded: LoadedExperiment): Pick<LoaderState, "diagnostics" | "referencedFiles"> {
-  return { diagnostics: loaded.diagnostics, referencedFiles: loaded.referencedFiles };
+export function loaderDiagnosticSink(loaded: LoadedExperiment): Pick<LoaderState, "diagnostics" | "referencedFiles" | "referencedDirectories"> {
+  return { diagnostics: loaded.diagnostics, referencedFiles: loaded.referencedFiles, referencedDirectories: loaded.referencedDirectories };
 }
 
 function makeLoaderState(
-  sink: Pick<LoaderState, "diagnostics" | "referencedFiles">,
+  sink: Pick<LoaderState, "diagnostics" | "referencedFiles" | "referencedDirectories">,
 ): LoaderState {
-  return { diagnostics: sink.diagnostics, referencedFiles: sink.referencedFiles, referenceStack: [] };
+  return { diagnostics: sink.diagnostics, referencedFiles: sink.referencedFiles, referencedDirectories: sink.referencedDirectories, referenceStack: [] };
 }
 
 export async function resolveConditionOverrides(
   raw: unknown,
   declaringFile: string,
-  sink: Pick<LoaderState, "diagnostics" | "referencedFiles">,
+  sink: Pick<LoaderState, "diagnostics" | "referencedFiles" | "referencedDirectories">,
   location: string,
 ): Promise<Record<string, unknown>> {
   const state = makeLoaderState(sink);
@@ -467,7 +471,7 @@ export async function resolveAxisValue(
   axis: string,
   raw: unknown,
   declaringFile: string,
-  sink: Pick<LoaderState, "diagnostics" | "referencedFiles">,
+  sink: Pick<LoaderState, "diagnostics" | "referencedFiles" | "referencedDirectories">,
   location: string,
 ): Promise<unknown> {
   const state = makeLoaderState(sink);
@@ -499,7 +503,7 @@ export async function resolveAxisValue(
 export async function validateResolvedBaselineFields(
   raw: unknown,
   declaringFile: string,
-  sink: Pick<LoaderState, "diagnostics" | "referencedFiles">,
+  sink: Pick<LoaderState, "diagnostics" | "referencedFiles" | "referencedDirectories">,
   location: string,
 ): Promise<BaselineConfig> {
   const state = makeLoaderState(sink);

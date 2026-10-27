@@ -21,7 +21,7 @@ function errorText(error: unknown): string {
 }
 
 async function runWithLimit<T>(
-  task: Promise<T>,
+  task: () => Promise<T>,
   timeoutMs: number,
   onTimeout: () => Promise<void>,
 ): Promise<T> {
@@ -32,11 +32,14 @@ async function runWithLimit<T>(
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      void onTimeout().finally(() => reject(new LimitReachedError("wall_clock", `Wall-clock limit (${timeoutMs}ms) reached`)));
+      reject(new LimitReachedError("wall_clock", `Wall-clock limit (${timeoutMs}ms) reached`));
     }, timeoutMs);
   });
   try {
-    return await Promise.race([task, timeout]);
+    return await Promise.race([task(), timeout]);
+  } catch (error) {
+    if (error instanceof LimitReachedError) await onTimeout();
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -60,7 +63,7 @@ export async function executeTrial(payload: WorkerPayload): Promise<RunResult> {
   let initialFiles: Awaited<ReturnType<typeof inventory>> = [];
   let finalFiles: Awaited<ReturnType<typeof inventory>> = [];
   let currentStepId: string | undefined;
-  const messages: unknown[] = [];
+  const messages: Array<{ step_id: string; messages: unknown[] }> = [];
 
   const interrupt = (): void => {
     controller.abort();
@@ -68,6 +71,14 @@ export async function executeTrial(payload: WorkerPayload): Promise<RunResult> {
   };
   process.once("SIGTERM", interrupt);
   process.once("SIGINT", interrupt);
+  const withinDeadline = <T>(task: () => Promise<T>): Promise<T> => runWithLimit(
+    task,
+    (condition.config.limits?.wall_clock_ms ?? 300_000) - (Date.now() - startedAtMs),
+    async () => {
+      controller.abort();
+      await activeSession?.session.abort();
+    },
+  );
 
   try {
     await recorder.initialize({
@@ -91,36 +102,31 @@ export async function executeTrial(payload: WorkerPayload): Promise<RunResult> {
       },
     };
     adapter = new PiAdapter(condition.config, ctx);
-    await adapter.initialize();
+    const firstStep = scenario.steps[0]!;
+    await withinDeadline(() => adapter!.initialize({ conversation: [], query: firstStep.input, step_id: firstStep.id }));
     initialFiles = await inventory(workspace);
 
     for (const [stepIndex, step] of scenario.steps.entries()) {
       if (controller.signal.aborted) throw new InterruptedError();
       currentStepId = step.id;
+      if (stepIndex > 0 && adapter.memoryStore) await adapter.memoryStore.captureFileMutations();
       if (stepIndex > 0 && scenario.memory_between_steps === "reset" && adapter.memoryStore) {
         await adapter.memoryStore.reset();
-        await adapter.memoryStore.materializeFiles();
+        await withinDeadline(() => adapter!.memoryStore!.materializeFiles({ conversation: [], query: step.input, step_id: step.id }));
       }
       if (!activeSession || scenario.conversation === "fresh-per-step") {
         activeSession?.dispose();
-        activeSession = await adapter.createSession();
+        activeSession = await withinDeadline(() => adapter!.createSession());
       }
       adapter.setStep(step.id);
       await recorder.record("scenario_input", { input: step.input }, step.id);
-      const wallClockLimit = condition.config.limits?.wall_clock_ms ?? 300_000;
-      await runWithLimit(
-        activeSession.session.prompt(step.input, { expandPromptTemplates: false, source: "rpc" }),
-        wallClockLimit - (Date.now() - startedAtMs),
-        () => activeSession!.session.abort(),
-      );
-      const maxCalls = condition.config.limits?.max_model_calls ?? 100;
-      if (adapter.modelCalls > maxCalls) {
-        throw new LimitReachedError("model_calls", `Maximum model calls (${maxCalls}) reached`);
-      }
+      await withinDeadline(() => activeSession!.session.prompt(step.input, { expandPromptTemplates: false, source: "rpc" }));
+      adapter.throwIfFailed();
       const stepMessages = structuredClone(activeSession.session.messages);
       messages.push({ step_id: step.id, messages: stepMessages });
       const lastAssistant = [...activeSession.session.messages].reverse().find((message) => message.role === "assistant") as { stopReason?: string; errorMessage?: string } | undefined;
       if (lastAssistant?.stopReason === "error") throw new Error(lastAssistant.errorMessage ?? "Model response failed");
+      if (lastAssistant?.stopReason === "aborted") throw new InterruptedError("Model response was aborted");
     }
     status = "completed";
   } catch (error) {
@@ -134,6 +140,9 @@ export async function executeTrial(payload: WorkerPayload): Promise<RunResult> {
     if (status === "interrupted") await recorder.record("cancellation", { reason: "signal" });
     await recorder.record("run_error", { status, error: errorText(error) });
   } finally {
+    if (activeSession && currentStepId && !messages.some((step) => step.step_id === currentStepId)) {
+      messages.push({ step_id: currentStepId, messages: structuredClone(activeSession.session.messages) });
+    }
     activeSession?.dispose();
     if (adapter?.memoryStore) await adapter.memoryStore.captureFileMutations();
     finalFiles = await inventory(workspace);

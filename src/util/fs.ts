@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ContentHash } from "../types.js";
 
@@ -59,4 +59,28 @@ export async function readJson<T>(filePath: string): Promise<T> {
 
 export function resolveFrom(declaringFile: string, referencedPath: string): string {
   return path.resolve(path.dirname(declaringFile), referencedPath);
+}
+
+export function isWithinDirectory(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+/** Reject root replacement, traversal, and symlinks before mutating workspace paths. */
+export async function resolveWorkspacePath(workspace: string, relative: string): Promise<string> {
+  const root = path.resolve(workspace);
+  const target = path.resolve(root, relative);
+  if (path.isAbsolute(relative) || !isWithinDirectory(root, target)) {
+    throw new Error(`Path must be a relative path strictly inside the workspace: ${relative}`);
+  }
+  let current = root;
+  for (const part of path.relative(root, target).split(path.sep)) {
+    current = path.join(current, part);
+    try {
+      if ((await lstat(current)).isSymbolicLink()) throw new Error(`Workspace path contains a symlink: ${relative}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return target;
 }

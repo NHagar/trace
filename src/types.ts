@@ -55,6 +55,7 @@ export interface ModuleStrategy {
   type: "custom";
   module: string;
   export?: string;
+  factory?: boolean;
   config?: JsonObject;
 }
 
@@ -168,7 +169,7 @@ export interface ContentHash {
 
 export interface ExecutionPlan {
   schema_version: 1;
-  plan_version: 1;
+  plan_version: 2;
   experiment_id: string;
   execution_id: string;
   created_at: string;
@@ -184,6 +185,7 @@ export interface ExecutionPlan {
     dependency_lock_sha256?: string;
   };
   content_hashes: ContentHash[];
+  directory_contents: Array<{ path: string; files: string[] }>;
   conditions: ResolvedCondition[];
   scenarios: ScenarioConfig[];
   runs: PlannedRun[];

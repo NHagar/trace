@@ -36,6 +36,8 @@ agent-study run --plan ./my-experiment.plan.json
 
 `run` repeats the same static checks (or validates a frozen saved plan), imports custom modules in per-run worker processes, resolves credentials, and executes trials. A saved plan is rejected if its content, referenced assets, Node version, runner version, Pi version, or dependency lock changes.
 
+Output directories must be empty; an existing execution cannot be overwritten or resumed. Saved plans also freeze the file membership of input directories. Plans created before plan format 2 must be regenerated with `check --write-plan`.
+
 ## Configuration
 
 An experiment combines a complete baseline, either explicit conditions or a Cartesian matrix, scenarios, and repetitions:
@@ -88,7 +90,11 @@ A factory's default (or named) export is called as `factory(runContext, config)`
 
 ### Memory
 
-Memory is configured as independent contents → retrieval → representation → delivery stages. Built-in retrieval is `all`; renderers are `verbatim`, `markdown-records`, and `json-records`. Custom strategies export a function or an object implementing `retrieve()`/`render()`. Delivery supports system-prompt injection, hidden context messages, explicit tools, or workspace files. Memory is read-only unless set to `writable`.
+Memory is configured as independent contents → retrieval → representation → delivery stages. Built-in retrieval is `all`; renderers are `verbatim`, `markdown-records`, and `json-records`. Every delivery mode applies the configured retrieval and representation stages. Delivery supports system-prompt injection, hidden context messages, explicit tools, or workspace files. Memory is read-only unless set to `writable`.
+
+Custom retrieval functions receive `(input, runContext)` and return `{records}`. Custom render functions receive `(selection, runContext)` and return `{text, files?}`. An exported object may instead implement `retrieve()` or `render()` with the same arguments. To export a factory, explicitly set `factory: true` on the custom strategy; the factory receives its `config` and returns that object. Strategies are instantiated once per run. A failed memory stage fails the trial.
+
+Memory tools pass their query through the retrieval stage and return rendered text. File delivery writes the renderer's `files` entries, or a single text file when `files` is omitted. Destinations and rendered file paths must stay inside their workspace and memory directory, respectively, and cannot contain symlinks. File delivery runs initially and after a memory reset; the initial retrieval receives the first scenario input. Writable file changes are captured as file-content records. Model-call limits include agent turns, retrieval helpers, and compaction.
 
 JSON record files use this schema:
 

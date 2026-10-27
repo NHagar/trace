@@ -133,14 +133,103 @@ describe("Pi adapter and execution", () => {
       }),
       responses: [
         { tool_call: { name: "fake_search", arguments: { query: "ok" } } },
+        { tool_call: { name: "fake_search", arguments: { query: "should be blocked" } } },
         { text: "should be blocked" },
       ],
       extra: { "fixtures/tool.json": '{"default":"ok"}\n' },
     });
     const limited = await runSingle(limitRoot);
     expect(limited.result.status).toBe("limit_reached");
+    expect(limited.result.model_calls).toBe(1);
+    const limitedEvents = await events(limited.output, limited.plan.runs[0]!.run_id);
+    expect(limitedEvents.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+    expect(limitedEvents.some((event) => event.type === "message_end" && JSON.stringify(event).includes("should be blocked"))).toBe(false);
     const finalState = await readJson<{ termination: string }>(path.join(limited.output, "runs", limited.plan.runs[0]!.run_id, "final-state.json"));
     expect(finalState.termination).toBe("model_calls");
+  });
+
+  it("classifies a timed-out model response as limit_reached", async () => {
+    const root = await basicProject({
+      baseline: baselineYaml({ limits: "  wall_clock_ms: 500\n  max_model_calls: 20" }),
+      responses: [{ text: "slow response ".repeat(100) }],
+      extra: { "models/model.yaml": "provider: fixture\nid: scripted\nfixture: {responses: ./responses.json, tokens_per_second: 50}\n" },
+    });
+    const limited = await runSingle(root);
+    expect(limited.result.status).toBe("limit_reached");
+    const state = await readJson<{ termination: string }>(path.join(limited.output, "runs", limited.result.run_id, "final-state.json"));
+    expect(state.termination).toBe("wall_clock");
+    expect((await events(limited.output, limited.result.run_id)).filter((event) => event.type === "limit_reached")).toHaveLength(1);
+  });
+
+  it("applies the deadline to file-memory initialization and cancels its helper request", async () => {
+    const root = await basicProject({
+      baseline: baselineYaml({
+        limits: "  wall_clock_ms: 500\n  max_model_calls: 20",
+        memory: "memory:\n  contents: ./memory.md\n  retrieval: {type: custom, module: ./retrieve.mjs}\n  representation: {type: verbatim}\n  delivery: {type: files}\n",
+      }),
+      responses: [{ text: "slow helper ".repeat(100) }],
+      extra: {
+        "models/model.yaml": "provider: fixture\nid: scripted\nfixture: {responses: ./responses.json, tokens_per_second: 50}\n",
+        "memory.md": "memory",
+        "retrieve.mjs": `export default async (input, ctx) => {await ctx.recorded_client.complete({prompt:"select"}); return {records:[]};};`,
+      },
+    });
+    const limited = await runSingle(root);
+    expect(limited.result.status).toBe("limit_reached");
+    expect(limited.result.error).toContain("Wall-clock limit");
+    expect((await events(limited.output, limited.result.run_id)).filter((event) => event.type === "session_created")).toHaveLength(0);
+  });
+
+  it("fails a run when custom memory stages throw, before sending a model request", async () => {
+    for (const timing of ["once-per-user-input", "before-every-model-call"]) {
+      const root = await basicProject({
+        baseline: baselineYaml({ memory: `memory:\n  contents: ./memory.md\n  retrieval: {type: all}\n  representation: {type: custom, module: ./render.mjs}\n  delivery: {type: system-prompt, timing: ${timing}}\n` }),
+        extra: {
+          "memory.md": "required memory",
+          "render.mjs": `export default async () => {throw new Error("memory stage failed");};`,
+        },
+      });
+      const failed = await runSingle(root);
+      expect(failed.result.status).toBe("failed");
+      expect(failed.result.error).toContain("memory stage failed");
+      expect(failed.result.model_calls).toBe(0);
+      expect((await events(failed.output, failed.result.run_id)).filter((event) => event.type === "provider_payload")).toHaveLength(0);
+    }
+  });
+
+  it("fails a run when a memory tool's retrieval stage throws", async () => {
+    const root = await basicProject({
+      baseline: baselineYaml({
+        tools: "  mode: replace\n  entries:\n    - {name: memory_search, source: memory}",
+        memory: "memory:\n  contents: ./memory.md\n  retrieval: {type: custom, module: ./retrieve.mjs}\n  representation: {type: verbatim}\n  delivery: {type: tool, name: memory_search}\n",
+      }),
+      responses: [{ tool_call: { name: "memory_search", arguments: { query: "test" } } }, { text: "must not continue" }],
+      extra: { "memory.md": "required memory", "retrieve.mjs": `export default async () => {throw new Error("retrieval failed");};` },
+    });
+    const failed = await runSingle(root);
+    expect(failed.result.status).toBe("failed");
+    expect(failed.result.error).toContain("retrieval failed");
+    expect(failed.result.model_calls).toBe(1);
+  });
+
+  it("counts retrieval-helper requests toward the same model-call budget", async () => {
+    const root = await basicProject({
+      baseline: baselineYaml({
+        limits: "  wall_clock_ms: 5000\n  max_model_calls: 1",
+        memory: "memory:\n  contents: ./memory.md\n  retrieval: {type: custom, module: ./retrieve.mjs}\n  representation: {type: verbatim}\n  delivery: {type: system-prompt}\n",
+      }),
+      responses: [{ text: "helper response" }, { text: "main response must be blocked" }],
+      extra: {
+        "memory.md": "memory",
+        "retrieve.mjs": `export default async (input, ctx) => {await ctx.recorded_client.complete({prompt:"select"}); return {records:[]};};`,
+      },
+    });
+    const limited = await runSingle(root);
+    expect(limited.result.status).toBe("limit_reached");
+    expect(limited.result.model_calls).toBe(1);
+    const recorded = await events(limited.output, limited.result.run_id);
+    expect(recorded.filter((event) => event.type === "memory_model_response")).toHaveLength(1);
+    expect(recorded.some((event) => event.type === "message_end" && JSON.stringify(event).includes("main response must be blocked"))).toBe(false);
   });
 
   it("records Pi retry and overflow-compaction events without conflating them", async () => {

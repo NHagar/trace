@@ -18,7 +18,7 @@ import {
   type LoadedExperiment,
 } from "../config/load.js";
 import { validateBaseline, validateExperimentShape, validateScenarios } from "../config/validate.js";
-import { pathExists, sha256File } from "../util/fs.js";
+import { pathExists, sha256File, walkFiles } from "../util/fs.js";
 import { deepMerge, hashJson, setPath, slug, stableStringify } from "../util/object.js";
 import { shuffle } from "../util/random.js";
 
@@ -142,7 +142,6 @@ async function expandConditions(loaded: LoadedExperiment): Promise<ResolvedCondi
 }
 
 function makeRuns(
-  executionId: string,
   conditions: ResolvedCondition[],
   loaded: LoadedExperiment,
   execution: Required<NonNullable<ExperimentConfig["execution"]>>,
@@ -164,7 +163,6 @@ function makeRuns(
       }
     }
   }
-  void executionId;
   return execution.order === "randomized" ? shuffle(runs, execution.seed) : runs;
 }
 
@@ -189,12 +187,25 @@ export async function planExperiment(
   validateExperimentShape(loaded.experiment, loaded.diagnostics);
   validateScenarios(loaded.scenarios, loaded.diagnostics);
   const conditions = await expandConditions(loaded);
+  if (loaded.diagnostics.some((item) => item.severity === "error")) return { diagnostics: loaded.diagnostics };
+  const execution = { ...EXECUTION_DEFAULTS, ...(loaded.experiment.execution ?? {}), ...executionOverrides };
+  const runs = makeRuns(conditions, loaded, execution);
+  const runIds = new Set<string>();
+  for (const run of runs) {
+    if (runIds.has(run.run_id)) loaded.diagnostics.push({
+      severity: "error", code: "duplicate_run_id", message: `Run IDs collide after normalization: ${run.run_id}`,
+    });
+    runIds.add(run.run_id);
+  }
   const errors = loaded.diagnostics.filter((item) => item.severity === "error");
   if (errors.length > 0) return { diagnostics: loaded.diagnostics };
 
-  const execution = { ...EXECUTION_DEFAULTS, ...(loaded.experiment.execution ?? {}), ...executionOverrides };
   const executionId = `${slug(loaded.experiment.id)}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}-${randomUUID().slice(0, 8)}`;
   const contentHashes = await buildContentHashes(loaded);
+  const directoryContents = await Promise.all([...loaded.referencedDirectories].sort().map(async (directory) => ({
+    path: path.relative(loaded.root, directory).startsWith("..") ? directory : path.relative(loaded.root, directory),
+    files: (await walkFiles(directory)).map((file) => path.relative(directory, file)),
+  })));
   const lock = contentHashes.find((entry) => path.basename(entry.path) === "package-lock.json");
   const warnings = [
     "Static checks do not verify credentials, provider availability, or custom implementation behavior.",
@@ -202,7 +213,7 @@ export async function planExperiment(
   ];
   const unsigned = {
     schema_version: 1 as const,
-    plan_version: 1 as const,
+    plan_version: 2 as const,
     experiment_id: loaded.experiment.id,
     execution_id: executionId,
     created_at: new Date().toISOString(),
@@ -215,9 +226,10 @@ export async function planExperiment(
       ...(lock ? { dependency_lock_sha256: lock.sha256 } : {}),
     },
     content_hashes: contentHashes,
+    directory_contents: directoryContents,
     conditions,
     scenarios: loaded.scenarios,
-    runs: makeRuns(executionId, conditions, loaded, execution),
+    runs,
     execution,
     warnings,
   };
@@ -227,6 +239,12 @@ export async function planExperiment(
 
 export async function validateSavedPlan(plan: ExecutionPlan): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
+  if (plan.plan_version !== 2 || !Array.isArray(plan.directory_contents)) {
+    return [{ severity: "error", code: "stale_plan", message: "Saved plan format is outdated; run check again to freeze directory contents" }];
+  }
+  if (new Set(plan.runs.map((run) => run.run_id)).size !== plan.runs.length) {
+    diagnostics.push({ severity: "error", code: "duplicate_run_id", message: "Saved plan contains duplicate run IDs" });
+  }
   if (plan.runtime.runner !== "0.1.0" || plan.runtime.pi !== PI_VERSION || plan.runtime.node !== process.version) {
     diagnostics.push({
       severity: "error",
@@ -248,6 +266,13 @@ export async function validateSavedPlan(plan: ExecutionPlan): Promise<Diagnostic
     const current = await sha256File(filePath);
     if (current.sha256 !== entry.sha256 || current.size !== entry.size) {
       diagnostics.push({ severity: "error", code: "stale_plan", message: `Referenced asset changed: ${entry.path}`, path: entry.path });
+    }
+  }
+  for (const entry of plan.directory_contents) {
+    const directory = path.isAbsolute(entry.path) ? entry.path : path.join(plan.root, entry.path);
+    const files = (await walkFiles(directory)).map((file) => path.relative(directory, file));
+    if (!(await pathExists(directory)) || stableStringify(files) !== stableStringify(entry.files)) {
+      diagnostics.push({ severity: "error", code: "stale_plan", message: `Referenced directory contents changed: ${entry.path}`, path: entry.path });
     }
   }
   return diagnostics;
