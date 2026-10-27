@@ -4,7 +4,7 @@
   "description": "Run controlled experiments with coding agents and record their behavior",
   "type": "module",
   "bin": {
-    "trace": "./dist/cli/index.js"
+    "trace": "dist/cli/index.js"
   },
   "exports": {
     ".": {
