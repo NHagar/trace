@@ -19,7 +19,7 @@ npm install --global @nhagar/trace
 trace --help
 ```
 
-The package is named `@nhagar/trace`; the command is `trace`. Until the first npm release, use the source installation below.
+The package is named `@nhagar/trace`; the command is `trace`.
 
 To run a command without installing globally:
 
